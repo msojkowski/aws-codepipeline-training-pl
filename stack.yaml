@@ -26,9 +26,9 @@ Resources:
     Properties:
       FunctionName: ExpressAppFunction
       Runtime: nodejs18.x
-      Handler: handler.handler
+      Handler: src/handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Code: ./src
+      Code: ./
       Timeout: 10
 
   ApiGateway:
