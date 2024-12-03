@@ -1,70 +1,85 @@
 AWSTemplateFormatVersion: 2010-09-09
 Resources:
-  LambdaExecutionRole:
-    Type: AWS::IAM::Role
+  ApiProxyFunction:
+    Type: 'AWS::Lambda::Function'
     Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: LambdaBasicExecution
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
-
-  LambdaFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: ExpressAppFunction
-      Runtime: nodejs18.x
-      Handler: src/handler.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
       Code: ./
+      FunctionName: 'AWSTrainingLambdaFunction'
+      MemorySize: 256
+      Tags:
+        - Value: SAM
+          Key: 'lambda:createdBy'
+      Handler: ./src/handler.handler
+      Role: !GetAtt
+        - ProxyApiRole
+        - Arn
+      Runtime: nodejs18.x
       Timeout: 30
+ 
+  ProxyApiRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
 
-  ApiGateway:
+  ApiProxyFunctionPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      Principal: apigateway.amazonaws.com
+      FunctionName: !Ref ApiProxyFunction
+
+  ProxyApi:
     Type: AWS::ApiGateway::RestApi
     Properties:
-      Name: ExpressAppAPI
+      Description: Proxy API Gateway
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Name: 'AWSTrainingProxyApi'
 
-  ApiGatewayResource:
-    Type: AWS::ApiGateway::Resource
+  ProxyResource:
+    Type: 'AWS::ApiGateway::Resource'
     Properties:
-      ParentId: !GetAtt ApiGateway.RootResourceId
-      PathPart: express
-      RestApiId: !Ref ApiGateway
-
-  ApiGatewayMethod:
-    Type: AWS::ApiGateway::Method
+      RestApiId: !Ref ProxyApi
+      ParentId: !GetAtt 
+        - ProxyApi
+        - RootResourceId
+      PathPart: '{proxy+}'
+  ProxyResourceANY:
+    Type: 'AWS::ApiGateway::Method'
     Properties:
+      RestApiId: !Ref ProxyApi
+      ResourceId: !Ref ProxyResource
       HttpMethod: ANY
       AuthorizationType: NONE
-      RestApiId: !Ref ApiGateway
-      ResourceId: !Ref ApiGatewayResource
       Integration:
         Type: AWS_PROXY
         IntegrationHttpMethod: POST
-        Uri: !Sub
-          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LambdaFunction.Arn}/invocations
+        Uri: !Sub >-
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApiProxyFunction.Arn}/invocations
 
-  LambdaPermission:
-    Type: AWS::Lambda::Permission
+  ApiProxyDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ProxyApiRootMethod
+
+  ApiProxyDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ProxyResourceANY
     Properties:
-      FunctionName: !Ref LambdaFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub
-        arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*/express
+      RestApiId: !Ref ProxyApi
+      StageName: 'dev'
 
 Outputs:
   ApiUrl:
