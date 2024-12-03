@@ -29,7 +29,7 @@ Resources:
       Handler: src/handler.handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Code: ./
-      Timeout: 10
+      Timeout: 30
 
   ApiGateway:
     Type: AWS::ApiGateway::RestApi
