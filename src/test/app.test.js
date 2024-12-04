@@ -11,7 +11,7 @@ describe('Express App Tests', () => {
   test('GET /test should return a test message', async () => {
     const response = await request(app).get('/test')
     expect(response.statusCode).toBe(200)
-    expect(response.body).toEqual({ message: 'Test endpoint working!' })
+    expect(response.body).toEqual({ message: 'Test endpoint working! Modified endpoint!' })
   })
 
   test('GET /nonexistent should return 404', async () => {
