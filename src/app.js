@@ -8,7 +8,7 @@ app.get('/', (req, res) => {
 })
 
 app.get('/test', (req, res) => {
-  res.status(200).json({ message: 'Test endpoint working!' })
+  res.status(200).json({ message: 'Test endpoint working! Modified endpoint!' })
 })
 
 module.exports = app
