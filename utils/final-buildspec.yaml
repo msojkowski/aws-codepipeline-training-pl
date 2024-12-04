@@ -1,0 +1,23 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo Installing dependencies...
+      - npm install
+  pre_build:
+    commands:
+      - export S3_BUCKET=aws-training-codepipeline-374117739894-eu-central-1  # Replace with your S3 bucket name
+      - export TEMPLATE_FILE=stack.yaml   # Replace with your CloudFormation or SAM template file
+      - export OUTPUT_TEMPLATE=packaged-template.yaml  # Output file for the packaged template
+
+  build:
+    commands:
+      - echo Running tests...
+      - npm test
+
+      - aws cloudformation package --template-file stack.yaml --s3-bucket aws-training-codepipeline-374117739894-eu-central-1 --output-template-file packaged-template.yaml
+
+artifacts:
+  files:
+    - '**/*'
