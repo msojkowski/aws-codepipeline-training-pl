@@ -9,7 +9,9 @@ phases:
     commands:
       - echo Running tests...
       - npm test
-      
+
+      - aws cloudformation package --template-file stack.yaml --s3-bucket aws-pipeline-workshop-586794449177-eu-central-1 --output-template-file sam-stack.yaml
+
 artifacts:
   files:
     - '**/*'
