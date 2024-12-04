@@ -1,0 +1,26 @@
+{
+  "StackName": "aws-training-pipeline-stack",
+  "Parameters": [
+    {
+      "ParameterKey": "ProjectID",
+      "ParameterValue": "aws-training"
+    },
+    {
+      "ParameterKey": "RepositoryName",
+      "ParameterValue": "aws-codepipeline-training-pl"
+    },
+    {
+      "ParameterKey": "BranchName",
+      "ParameterValue": "main"
+    },
+    {
+      "ParameterKey": "GitHubRepoOwner",
+      "ParameterValue": "makspiechota"
+    },
+    {
+      "ParameterKey": "GitHubOAuthToken",
+      "ParameterValue": ""
+    }
+  ],
+  "Capabilities": ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM"]
+}

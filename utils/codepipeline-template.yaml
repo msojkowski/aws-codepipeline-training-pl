@@ -1,0 +1,375 @@
+Parameters:
+  ProjectID:
+    Description: The Project Number
+    Type: String
+    Default: 0000
+  BranchName:
+    Description: Repository branch name
+    Type: String
+    Default: main
+  RepositoryName:
+    Description: Repository name
+    Type: String
+    Default: myrepo
+  GitHubRepoOwner:
+    Description: The GitHub repository owner
+    Type: String
+  GitHubOAuthToken:
+    Description: OAuth token for GitHub integration
+    Type: String
+    NoEcho: true
+Resources:
+  BuildArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectID}-${AWS::Region}-${AWS::AccountId}-buildartifactsbucket'
+  BuildArtifactsBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref BuildArtifactsBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUnEncryptedObjectUploads
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:PutObject'
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - BuildArtifactsBucket
+                  - Arn
+                - /*
+            Condition:
+              StringNotEquals:
+                's3:x-amz-server-side-encryption': 'aws:kms'
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - BuildArtifactsBucket
+                  - Arn
+                - /*
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+  CodeBuildServiceRole:
+      Type: AWS::IAM::Role
+      Properties:
+          ManagedPolicyArns:
+            - 'arn:aws:iam::aws:policy/service-role/AWSLambdaRole'
+          RoleName: !Sub '${ProjectID}-CodeBuildServiceRole-${AWS::Region}'
+          AssumeRolePolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Action:
+                    - 'sts:AssumeRole'
+                  Effect: Allow
+                  Principal:
+                    Service:
+                      - codebuild.amazonaws.com
+          Path: /
+          ManagedPolicyArns:
+            - 'arn:aws:iam::aws:policy/AdministratorAccess'
+          Policies:
+            - PolicyName: InvokeLambdaAccess
+              PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Action:
+                      - 'lambda:InvokeFunction'
+                      - 'lambda:InvokeAsync'
+                    Effect: Allow
+                    Resource: '*'
+            - PolicyName: CodeBuildAccess
+              PolicyDocument:
+                Version: '2012-10-17'
+                Statement:
+                  - Effect: Allow
+                    Resource:
+                      - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectID}*'
+                      - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectID}*:*:*'
+                    Action:
+                      - 'logs:CreateLogStream'
+                      - 'logs:PutLogEvents'
+                  - Effect: Allow
+                    Resource:
+                      - '*'
+                    Action:
+                      - 'logs:CreateLogGroup'
+                      - 'cloudformation:DescribeStacks'
+                  - Effect: Allow
+                    Resource:
+                      - !Sub 'arn:aws:s3:::${BuildArtifactsBucket}/*'
+                      - !Sub 'arn:aws:s3:::${BuildArtifactsBucket}'
+                      # any bucket created by app-sam.yaml
+                      - !Sub 'arn:aws:s3:::${ProjectID}*'
+                      - !Sub 'arn:aws:s3:::${ProjectID}*/*'
+                    Action:
+                      - 's3:GetObject'
+                      - 's3:GetObjectVersion'
+                      - 's3:PutObject'
+                      - 's3:List*'
+                      - 's3:DeleteObject'
+                      - 's3:DeleteObject'
+
+                  - Effect: Allow
+                    Action:
+                      - 'apigateway:POST'
+                    Resource:
+                      - !Sub 'arn:aws:apigateway:${AWS::Region}::/restapis/*/deployments'
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${ProjectID}_build'
+      Description: Build project for the Lambda service
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: AWS_ACCOUNTID
+            Type: PLAINTEXT
+            Value: !Ref AWS::AccountId
+          - Name: AWS_REGION
+            Type: PLAINTEXT
+            Value: !Ref AWS::Region
+          - Name: ProjectID
+            Type: PLAINTEXT
+            Value: !Ref ProjectID
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub 'buildspec.yaml'
+
+  AmazonCloudWatchEventRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: cwe-pipeline-execution
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'codepipeline:StartPipelineExecution'
+                Resource: !Join 
+                  - ''
+                  - - 'arn:aws:codepipeline:'
+                    - !Ref 'AWS::Region'
+                    - ':'
+                    - !Ref 'AWS::AccountId'
+                    - ':'
+                    - !Ref AppPipeline
+  AmazonCloudWatchEventRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      EventPattern:
+        source:
+          - aws.codecommit
+        detail-type:
+          - CodeCommit Repository State Change
+        resources:
+          - !Join 
+            - ''
+            - - 'arn:aws:codecommit:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref RepositoryName
+        detail:
+          event:
+            - referenceCreated
+            - referenceUpdated
+          referenceType:
+            - branch
+          referenceName:
+            - !Ref BranchName
+      Targets:
+        - Arn: !Join 
+            - ''
+            - - 'arn:aws:codepipeline:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref AppPipeline
+          RoleArn: !GetAtt 
+            - AmazonCloudWatchEventRole
+            - Arn
+          Id: codepipeline-AppPipeline
+  AppPipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      Name: !Sub '${ProjectID}_pipeline'
+      RoleArn: !GetAtt 
+        - CodePipelineServiceRole
+        - Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHubSourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: 1
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                Owner: !Ref GitHubRepoOwner
+                Repo: !Ref RepositoryName
+                Branch: !Ref BranchName
+                OAuthToken: !Ref GitHubOAuthToken
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: CodeBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuiltZip
+        - Name: Deploy
+          Actions:
+          - Name: CreateChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: "1"
+            Configuration:
+              ActionMode: CHANGE_SET_REPLACE
+              RoleArn: !GetAtt CloudFormationExecutionRole.Arn
+              StackName: !Sub '${ProjectID}-cf-stack'
+              ChangeSetName: !Sub '${ProjectID}-cf-changeset'
+              TemplatePath: BuiltZip::sam-stack.yaml
+              #TemplateConfiguration: !Sub BuiltZip::prod/app-sam-param.json
+              Capabilities: CAPABILITY_IAM,CAPABILITY_NAMED_IAM
+            InputArtifacts:
+              - Name: BuiltZip
+            RunOrder: 1
+          - Name: ExecuteChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: "1"
+            Configuration:
+              ActionMode: CHANGE_SET_EXECUTE
+              RoleArn: !GetAtt CloudFormationExecutionRole.Arn
+              StackName: !Sub '${ProjectID}-cf-stack'
+              ChangeSetName: !Sub '${ProjectID}-cf-changeset'
+            OutputArtifacts:
+              - Name: !Sub '${ProjectID}ChangeSet'
+            RunOrder: 2
+      ArtifactStore:
+        Type: S3
+        Location: !Ref BuildArtifactsBucket
+  CloudFormationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectID}-CloudFormationExecutionRole-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Action:
+            - 'sts:AssumeRole'
+          Effect: Allow
+          Principal:
+            Service:
+              - cloudformation.amazonaws.com
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AdministratorAccess'
+  CodePipelineServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: AWS-CodePipeline-Service-3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'codecommit:CancelUploadArchive'
+                  - 'codecommit:GetBranch'
+                  - 'codecommit:GetCommit'
+                  - 'codecommit:GetUploadArchiveStatus'
+                  - 'codecommit:UploadArchive'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'codedeploy:CreateDeployment'
+                  - 'codedeploy:GetApplicationRevision'
+                  - 'codedeploy:GetDeployment'
+                  - 'codedeploy:GetDeploymentConfig'
+                  - 'codedeploy:RegisterApplicationRevision'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'codebuild:BatchGetBuilds'
+                  - 'codebuild:StartBuild'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'devicefarm:ListProjects'
+                  - 'devicefarm:ListDevicePools'
+                  - 'devicefarm:GetRun'
+                  - 'devicefarm:GetUpload'
+                  - 'devicefarm:CreateUpload'
+                  - 'devicefarm:ScheduleRun'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                  - 'lambda:ListFunctions'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'elasticbeanstalk:*'
+                  - 'ec2:*'
+                  - 'elasticloadbalancing:*'
+                  - 'autoscaling:*'
+                  - 'cloudwatch:*'
+                  - 's3:*'
+                  - 'sns:*'
+                  - 'cloudformation:*'
+                  - 'rds:*'
+                  - 'sqs:*'
+                  - 'ecs:*'
+                Resource: '*'
